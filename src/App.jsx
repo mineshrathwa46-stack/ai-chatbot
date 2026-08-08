@@ -383,7 +383,7 @@ function App() {
       console.log("☁️ Sending image to Gemini...");
 
       const response = await axios.post(
-        "http://localhost:5000/api/analyze",
+        "https://backend-ai-30fj.onrender.com/api/analyze",
         formData,
         {
           timeout: 120000,
