@@ -25,7 +25,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState("");
 
-  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+  const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "ai-chatbot-backend-74c8.onrender.com";
 
   // whether this browser even supports SpeechRecognition.
   // iOS Safari/Chrome (all iOS browsers use WebKit) do NOT
