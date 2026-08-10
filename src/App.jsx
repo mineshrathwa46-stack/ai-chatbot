@@ -21,6 +21,45 @@ function App() {
   const [selectedVoice, setSelectedVoice] = useState(null);
 
   // =====================================================
+  // MANUAL MODE
+  // When true, auto-restart of listening (after onend /
+  // onerror / TTS finishing) is disabled. The mic only
+  // starts when the user taps the mic button. This is the
+  // mode you want on phones, where continuous background
+  // SpeechRecognition is unreliable / drains battery / asks
+  // for mic permission awkwardly.
+  //
+  // Default is decided by device: phone → manual button,
+  // desktop → auto listening (same as before). The header
+  // toggle still lets anyone flip it either way.
+  // =====================================================
+
+  const detectIsMobile = () => {
+    if (typeof navigator === "undefined") return false;
+
+    const ua = navigator.userAgent || navigator.vendor || "";
+    const uaLooksMobile = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(
+      ua
+    );
+
+    const isTouchDevice =
+      typeof window !== "undefined" &&
+      ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
+    const isNarrowScreen =
+      typeof window !== "undefined" && window.innerWidth <= 900;
+
+    return uaLooksMobile || (isTouchDevice && isNarrowScreen);
+  };
+
+  const [manualMode, setManualMode] = useState(() => detectIsMobile());
+  const manualModeRef = useRef(manualMode);
+
+  useEffect(() => {
+    manualModeRef.current = manualMode;
+  }, [manualMode]);
+
+  // =====================================================
   // LIVE REFS (fix for stale closures in setTimeout /
   // SpeechRecognition callbacks). Any place that used to
   // read `cameraOn`, `cameraReady`, `loading`, `speaking`
@@ -136,15 +175,19 @@ function App() {
       setCameraReady(true);
       cameraReadyRef.current = true; // update ref immediately, don't wait for re-render
 
-      // Start automatic voice listening
-      setTimeout(() => {
-        startAutoListening();
-      }, 1000);
+      // In manual mode we do NOT auto-start listening — the
+      // user taps the mic button whenever they want to talk.
+      if (!manualModeRef.current) {
+        setTimeout(() => {
+          startAutoListening();
+        }, 1000);
+      }
     }
   };
 
   // =====================================================
-  // AUTOMATIC VOICE LISTENING
+  // VOICE LISTENING (used by both auto mode and the manual
+  // mic button — same recognition engine underneath)
   // =====================================================
 
   const startAutoListening = () => {
@@ -153,6 +196,7 @@ function App() {
 
     if (!SpeechRecognition) {
       console.error("Speech Recognition not supported.");
+      alert("Is browser mein voice recognition support nahi hai.");
       return;
     }
 
@@ -183,10 +227,10 @@ function App() {
 
     recognition.lang = "hi-IN";
     recognition.interimResults = false;
-    recognition.continuous = true;
+    recognition.continuous = !manualModeRef.current;
 
     recognition.onstart = () => {
-      console.log("🎤 Automatic listening...");
+      console.log("🎤 Listening...");
       setListening(true);
     };
 
@@ -230,6 +274,7 @@ function App() {
       // Normal browser events
       if (event.error === "aborted" || event.error === "no-speech") {
         if (
+          !manualModeRef.current &&
           cameraOnRef.current &&
           cameraReadyRef.current &&
           !loadingRef.current &&
@@ -256,8 +301,10 @@ function App() {
 
       setListening(false);
 
-      // Restart automatically
+      // Auto-restart only when NOT in manual mode. In manual
+      // mode the mic just turns off and waits for the next tap.
       if (
+        !manualModeRef.current &&
         cameraOnRef.current &&
         cameraReadyRef.current &&
         !loadingRef.current &&
@@ -294,6 +341,28 @@ function App() {
     }
 
     setListening(false);
+  };
+
+  // =====================================================
+  // MANUAL MIC BUTTON — tap to talk, tap again to stop
+  // =====================================================
+
+  const handleMicButtonPress = () => {
+    if (!cameraOnRef.current || !cameraReadyRef.current) {
+      return;
+    }
+
+    // AI busy — ignore taps while it's thinking or speaking
+    if (loadingRef.current || speakingRef.current) {
+      return;
+    }
+
+    if (listening) {
+      stopListening();
+      return;
+    }
+
+    startAutoListening();
   };
 
   // =====================================================
@@ -460,8 +529,12 @@ function App() {
       setSpeaking(false);
       speakingRef.current = false;
 
-      // Start listening again
-      if (cameraOnRef.current && cameraReadyRef.current) {
+      // Only auto-restart listening when not in manual mode.
+      if (
+        !manualModeRef.current &&
+        cameraOnRef.current &&
+        cameraReadyRef.current
+      ) {
         setTimeout(() => {
           startAutoListening();
         }, 500);
@@ -474,7 +547,11 @@ function App() {
       setSpeaking(false);
       speakingRef.current = false;
 
-      if (cameraOnRef.current && cameraReadyRef.current) {
+      if (
+        !manualModeRef.current &&
+        cameraOnRef.current &&
+        cameraReadyRef.current
+      ) {
         setTimeout(() => {
           startAutoListening();
         }, 500);
@@ -519,6 +596,37 @@ function App() {
       setSelectedVoice(voice);
       console.log("✅ Selected voice:", voice.name);
     }
+  };
+
+  // =====================================================
+  // TOGGLE AUTO / MANUAL MODE
+  // =====================================================
+
+  const toggleManualMode = () => {
+    setManualMode((prev) => {
+      const next = !prev;
+      manualModeRef.current = next;
+
+      // Switching into auto mode while camera's already up —
+      // kick off listening right away.
+      if (
+        !next &&
+        cameraOnRef.current &&
+        cameraReadyRef.current &&
+        !loadingRef.current &&
+        !speakingRef.current &&
+        !recognitionRef.current
+      ) {
+        setTimeout(() => startAutoListening(), 300);
+      }
+
+      // Switching into manual mode — stop whatever's running.
+      if (next) {
+        stopListening();
+      }
+
+      return next;
+    });
   };
 
   // =====================================================
@@ -586,13 +694,25 @@ function App() {
           <p className="text-xs text-slate-400">AI Smart Vision Assistant</p>
         </div>
 
-        <div className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-400 backdrop-blur">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              cameraOn ? "animate-pulse bg-emerald-400" : "bg-slate-600"
-            }`}
-          />
-          {cameraOn ? "AI ONLINE" : "OFFLINE"}
+        <div className="flex items-center gap-3">
+          {cameraOn && (
+            <button
+              onClick={toggleManualMode}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 backdrop-blur transition hover:bg-white/10"
+              title="Auto vs manual mic mode"
+            >
+              {manualMode ? "🎙️ Manual Mode" : "🔁 Auto Mode"}
+            </button>
+          )}
+
+          <div className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-400 backdrop-blur">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                cameraOn ? "animate-pulse bg-emerald-400" : "bg-slate-600"
+              }`}
+            />
+            {cameraOn ? "AI ONLINE" : "OFFLINE"}
+          </div>
         </div>
       </header>
 
@@ -691,6 +811,15 @@ function App() {
                     <span className="text-indigo-400">Speaking...</span>
                   </>
                 )}
+
+                {manualMode && !listening && !loading && !speaking && (
+                  <>
+                    <span className="h-2 w-2 rounded-full bg-slate-500" />
+                    <span className="text-slate-400">
+                      Tap the mic to speak
+                    </span>
+                  </>
+                )}
               </div>
 
               {/* ANSWER */}
@@ -702,7 +831,9 @@ function App() {
                   </p>
                 ) : (
                   <p className="text-sm text-slate-500">
-                    बोलिए, मैं सुन रही हूँ...
+                    {manualMode
+                      ? "Mic button dabaiye aur boliye..."
+                      : "बोलिए, मैं सुन रही हूँ..."}
                   </p>
                 )}
               </div>
@@ -743,15 +874,36 @@ function App() {
           </div>
         )}
 
-        {/* END CALL */}
+        {/* BOTTOM CONTROLS: MANUAL MIC BUTTON + END CALL */}
 
         {cameraOn && (
-          <button
-            onClick={stopCamera}
-            className="absolute bottom-7 left-1/2 z-50 flex h-14 w-14 -translate-x-1/2 items-center justify-center rounded-full bg-red-600 text-lg shadow-lg shadow-red-600/20 transition hover:bg-red-500"
-          >
-            ☎️
-          </button>
+          <div className="absolute bottom-7 left-1/2 z-50 flex -translate-x-1/2 items-center gap-6">
+            {/* MANUAL MIC BUTTON — shown whenever camera is on.
+                Tap to start listening, tap again to stop.
+                Disabled while the AI is thinking or speaking. */}
+
+            <button
+              onClick={handleMicButtonPress}
+              disabled={loading || speaking || !cameraReady}
+              className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl shadow-lg transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                listening
+                  ? "animate-pulse bg-emerald-600 shadow-emerald-600/30"
+                  : "bg-indigo-600 shadow-indigo-600/20 hover:bg-indigo-500"
+              }`}
+              title={listening ? "Tap to stop" : "Tap to talk"}
+            >
+              {listening ? "⏹️" : "🎤"}
+            </button>
+
+            {/* END CALL */}
+
+            <button
+              onClick={stopCamera}
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-lg shadow-lg shadow-red-600/20 transition hover:bg-red-500"
+            >
+              ☎️
+            </button>
+          </div>
         )}
       </main>
 
