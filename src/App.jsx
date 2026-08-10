@@ -20,6 +20,13 @@ function App() {
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState(null);
 
+  // NEW: whether this browser even supports SpeechRecognition.
+  // iOS Safari/Chrome (all iOS browsers use WebKit) do NOT
+  // support it, so we show a text fallback input instead of
+  // a mic button that silently does nothing.
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [manualTextInput, setManualTextInput] = useState("");
+
   // =====================================================
   // MANUAL MODE
   // When true, auto-restart of listening (after onend /
@@ -90,6 +97,17 @@ function App() {
   }, [speaking]);
 
   // =====================================================
+  // CHECK SPEECH RECOGNITION SUPPORT ONCE ON MOUNT
+  // =====================================================
+
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    setSpeechSupported(!!SpeechRecognition);
+  }, []);
+
+  // =====================================================
   // LOAD SYSTEM VOICES
   // =====================================================
 
@@ -120,6 +138,18 @@ function App() {
 
   // =====================================================
   // START CAMERA
+  //
+  // FIX: removed `audio: true` from getUserMedia. This app
+  // never uses that audio track for anything (no recording,
+  // no sending it anywhere) — its only job was to sit there
+  // holding the microphone hardware. On many Android/mobile
+  // browsers, only ONE consumer can hold the mic at a time,
+  // so once this stream grabbed it, SpeechRecognition (which
+  // needs the mic itself) could no longer get audio — it
+  // would start, get zero input, and immediately fire
+  // "no-speech" or just return an empty transcript. Desktop
+  // Chrome tends to allow both at once, which is why it
+  // "worked on desktop" but not on phone.
   // =====================================================
 
   const startCamera = async () => {
@@ -130,7 +160,7 @@ function App() {
           height: { ideal: 720 },
           facingMode: "user",
         },
-        audio: true,
+        // audio: true  -> removed, see note above
       });
 
       streamRef.current = stream;
@@ -177,7 +207,7 @@ function App() {
 
       // In manual mode we do NOT auto-start listening — the
       // user taps the mic button whenever they want to talk.
-      if (!manualModeRef.current) {
+      if (!manualModeRef.current && speechSupported) {
         setTimeout(() => {
           startAutoListening();
         }, 1000);
@@ -196,7 +226,7 @@ function App() {
 
     if (!SpeechRecognition) {
       console.error("Speech Recognition not supported.");
-      alert("Is browser mein voice recognition support nahi hai.");
+      setSpeechSupported(false);
       return;
     }
 
@@ -289,7 +319,16 @@ function App() {
       }
 
       if (event.error === "not-allowed") {
-        alert("Microphone permission denied.");
+        alert(
+          "Microphone permission denied. Browser settings me site ke liye mic allow kariye."
+        );
+        return;
+      }
+
+      if (event.error === "network") {
+        alert(
+          "Speech recognition ke liye internet connection chahiye. Network check kariye."
+        );
         return;
       }
     };
@@ -363,6 +402,27 @@ function App() {
     }
 
     startAutoListening();
+  };
+
+  // =====================================================
+  // MANUAL TEXT SUBMIT — fallback for browsers where
+  // SpeechRecognition isn't supported (iOS Safari/Chrome),
+  // or anytime someone prefers typing over speaking.
+  // =====================================================
+
+  const handleManualTextSubmit = async (e) => {
+    e.preventDefault();
+
+    const text = manualTextInput.trim();
+
+    if (!text || loadingRef.current || speakingRef.current) {
+      return;
+    }
+
+    setQuestion(text);
+    setManualTextInput("");
+
+    await analyzeFrame(text);
   };
 
   // =====================================================
@@ -529,9 +589,11 @@ function App() {
       setSpeaking(false);
       speakingRef.current = false;
 
-      // Only auto-restart listening when not in manual mode.
+      // Only auto-restart listening when not in manual mode
+      // and speech recognition is actually supported.
       if (
         !manualModeRef.current &&
+        speechSupported &&
         cameraOnRef.current &&
         cameraReadyRef.current
       ) {
@@ -549,6 +611,7 @@ function App() {
 
       if (
         !manualModeRef.current &&
+        speechSupported &&
         cameraOnRef.current &&
         cameraReadyRef.current
       ) {
@@ -611,6 +674,7 @@ function App() {
       // kick off listening right away.
       if (
         !next &&
+        speechSupported &&
         cameraOnRef.current &&
         cameraReadyRef.current &&
         !loadingRef.current &&
@@ -662,6 +726,7 @@ function App() {
 
     setQuestion("");
     setAnswer("");
+    setManualTextInput("");
   };
 
   // =====================================================
@@ -695,7 +760,7 @@ function App() {
         </div>
 
         <div className="flex items-center gap-3">
-          {cameraOn && (
+          {cameraOn && speechSupported && (
             <button
               onClick={toggleManualMode}
               className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 backdrop-blur transition hover:bg-white/10"
@@ -768,6 +833,16 @@ function App() {
           </div>
         )}
 
+        {/* SPEECH NOT SUPPORTED WARNING */}
+
+        {cameraOn && cameraReady && !speechSupported && (
+          <div className="absolute left-1/2 top-24 z-40 w-[380px] max-w-[calc(100%-48px)] -translate-x-1/2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-center text-xs text-amber-300 backdrop-blur-xl">
+            ⚠️ Is browser mein voice recognition support nahi hai (iOS pe
+            aksar aisa hota hai). Neeche text box se type karke pooch sakte
+            hain.
+          </div>
+        )}
+
         {/* AI STATUS CARD */}
 
         {cameraOn && (
@@ -812,11 +887,24 @@ function App() {
                   </>
                 )}
 
-                {manualMode && !listening && !loading && !speaking && (
+                {manualMode &&
+                  speechSupported &&
+                  !listening &&
+                  !loading &&
+                  !speaking && (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-slate-500" />
+                      <span className="text-slate-400">
+                        Tap the mic to speak
+                      </span>
+                    </>
+                  )}
+
+                {!speechSupported && !loading && !speaking && (
                   <>
                     <span className="h-2 w-2 rounded-full bg-slate-500" />
                     <span className="text-slate-400">
-                      Tap the mic to speak
+                      Type your question below
                     </span>
                   </>
                 )}
@@ -831,7 +919,9 @@ function App() {
                   </p>
                 ) : (
                   <p className="text-sm text-slate-500">
-                    {manualMode
+                    {!speechSupported
+                      ? "Neeche box mein type karke poochiye..."
+                      : manualMode
                       ? "Mic button dabaiye aur boliye..."
                       : "बोलिए, मैं सुन रही हूँ..."}
                   </p>
@@ -844,7 +934,7 @@ function App() {
         {/* VOICE SELECTOR */}
 
         {cameraOn && (
-          <div className="absolute bottom-28 left-6 z-40 w-72">
+          <div className="absolute bottom-28 left-6 z-40 w-72 max-w-[calc(100%-48px)]">
             <div className="rounded-2xl border border-white/10 bg-black/60 p-4 backdrop-blur-xl">
               <p className="mb-2 text-xs font-semibold text-slate-300">
                 🎙️ Assistant Voice
@@ -874,26 +964,56 @@ function App() {
           </div>
         )}
 
+        {/* TEXT FALLBACK INPUT — shown when SpeechRecognition
+            isn't supported (iOS), so the app is still usable */}
+
+        {cameraOn && cameraReady && !speechSupported && (
+          <form
+            onSubmit={handleManualTextSubmit}
+            className="absolute bottom-24 left-1/2 z-50 flex w-[90%] max-w-md -translate-x-1/2 items-center gap-2"
+          >
+            <input
+              type="text"
+              value={manualTextInput}
+              onChange={(e) => setManualTextInput(e.target.value)}
+              placeholder="Apna sawal type kariye..."
+              disabled={loading || speaking}
+              className="flex-1 rounded-full border border-white/10 bg-black/70 px-4 py-3 text-sm text-white outline-none backdrop-blur-xl disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={loading || speaking || !manualTextInput.trim()}
+              className="rounded-full bg-indigo-600 px-4 py-3 text-sm font-semibold hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ➤
+            </button>
+          </form>
+        )}
+
         {/* BOTTOM CONTROLS: MANUAL MIC BUTTON + END CALL */}
 
         {cameraOn && (
           <div className="absolute bottom-7 left-1/2 z-50 flex -translate-x-1/2 items-center gap-6">
-            {/* MANUAL MIC BUTTON — shown whenever camera is on.
-                Tap to start listening, tap again to stop.
-                Disabled while the AI is thinking or speaking. */}
+            {/* MANUAL MIC BUTTON — only shown when speech
+                recognition is actually supported by this
+                browser. Tap to start listening, tap again to
+                stop. Disabled while the AI is thinking or
+                speaking. */}
 
-            <button
-              onClick={handleMicButtonPress}
-              disabled={loading || speaking || !cameraReady}
-              className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl shadow-lg transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                listening
-                  ? "animate-pulse bg-emerald-600 shadow-emerald-600/30"
-                  : "bg-indigo-600 shadow-indigo-600/20 hover:bg-indigo-500"
-              }`}
-              title={listening ? "Tap to stop" : "Tap to talk"}
-            >
-              {listening ? "⏹️" : "🎤"}
-            </button>
+            {speechSupported && (
+              <button
+                onClick={handleMicButtonPress}
+                disabled={loading || speaking || !cameraReady}
+                className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl shadow-lg transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  listening
+                    ? "animate-pulse bg-emerald-600 shadow-emerald-600/30"
+                    : "bg-indigo-600 shadow-indigo-600/20 hover:bg-indigo-500"
+                }`}
+                title={listening ? "Tap to stop" : "Tap to talk"}
+              >
+                {listening ? "⏹️" : "🎤"}
+              </button>
+            )}
 
             {/* END CALL */}
 
