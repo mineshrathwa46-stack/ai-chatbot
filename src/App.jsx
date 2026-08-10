@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { auth, provider } from "./firebaseConfig";
-import { signInWithPopup, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
 
 function App() {
   const videoRef = useRef(null);
@@ -11,6 +15,7 @@ function App() {
 
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraFacingMode, setCameraFacingMode] = useState("user");
 
   const [listening, setListening] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -24,6 +29,7 @@ function App() {
 
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState("");
+  const [authReady, setAuthReady] = useState(false);
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "ai-chatbot-backend-74c8.onrender.com";
 
@@ -68,10 +74,15 @@ function App() {
 
   const [manualMode, setManualMode] = useState(() => detectIsMobile());
   const manualModeRef = useRef(manualMode);
+  const cameraFacingModeRef = useRef(cameraFacingMode);
 
   useEffect(() => {
     manualModeRef.current = manualMode;
   }, [manualMode]);
+
+  useEffect(() => {
+    cameraFacingModeRef.current = cameraFacingMode;
+  }, [cameraFacingMode]);
 
   // =====================================================
   // LIVE REFS (fix for stale closures in setTimeout /
@@ -150,6 +161,64 @@ function App() {
   // =====================================================
 
   useEffect(() => {
+    let isMounted = true;
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!isMounted) return;
+
+      if (firebaseUser) {
+        try {
+          const idToken = await firebaseUser.getIdToken();
+          const response = await axios.post(`${BACKEND_URL}/api/auth/google`, {
+            id_token: idToken,
+          });
+
+          const backendUser = response.data?.user || {
+            id: firebaseUser.uid,
+            name:
+              firebaseUser.displayName ||
+              firebaseUser.email?.split("@")[0] ||
+              "",
+            email: firebaseUser.email || "",
+            picture: firebaseUser.photoURL || "",
+            email_verified: firebaseUser.emailVerified || false,
+          };
+
+          if (isMounted) {
+            setUser(backendUser);
+          }
+        } catch (error) {
+          console.error("Failed to restore auth session:", error);
+
+          if (isMounted) {
+            setUser({
+              id: firebaseUser.uid,
+              name:
+                firebaseUser.displayName ||
+                firebaseUser.email?.split("@")[0] ||
+                "",
+              email: firebaseUser.email || "",
+              picture: firebaseUser.photoURL || "",
+              email_verified: firebaseUser.emailVerified || false,
+            });
+          }
+        }
+      } else if (isMounted) {
+        setUser(null);
+      }
+
+      if (isMounted) {
+        setAuthReady(true);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [BACKEND_URL]);
+
+  useEffect(() => {
     const loadVoices = () => {
       const available = window.speechSynthesis.getVoices();
 
@@ -190,13 +259,21 @@ function App() {
   // "worked on desktop" but not on phone.
   // =====================================================
 
-  const startCamera = async () => {
+  const startCamera = async (preferredFacingMode = cameraFacingModeRef.current) => {
     try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      setCameraReady(false);
+      cameraReadyRef.current = false;
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          facingMode: "user",
+          facingMode: preferredFacingMode,
         },
         // audio: true  -> removed, see note above
       });
@@ -225,6 +302,21 @@ function App() {
 
       alert(`${error.name}: ${error.message}`);
     }
+  };
+
+  const switchCamera = async () => {
+    if (!cameraOnRef.current) {
+      return;
+    }
+
+    const nextFacingMode = cameraFacingModeRef.current === "user" ? "environment" : "user";
+    setCameraFacingMode(nextFacingMode);
+    cameraFacingModeRef.current = nextFacingMode;
+
+    stopListening();
+    window.speechSynthesis.cancel();
+
+    await startCamera(nextFacingMode);
   };
 
   // =====================================================
@@ -1098,6 +1190,14 @@ function App() {
                 {listening ? "⏹️" : "🎤"}
               </button>
             )}
+
+            <button
+              onClick={switchCamera}
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-800 text-lg shadow-lg shadow-slate-700/20 transition hover:bg-slate-700"
+              title="Switch camera"
+            >
+              🔄
+            </button>
 
             {/* END CALL */}
 
